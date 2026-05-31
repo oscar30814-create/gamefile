@@ -6,8 +6,8 @@ Battle Fortress Game is a multiplayer 2D strategy and combat game where players 
 
 The game combines real-time combat, base defense, resource management, and team strategy into a competitive experience.
 
-Features
-Multiplayer Battle System – Fight against enemy players in team-based combat.
+Features ~
+
 Fortress Building – Construct walls, towers, and defensive structures.
 Attack & Defense Gameplay – Defend your base while launching attacks on enemy fortresses.
 Character Combat System – Players can move, attack, and use weapons or special abilities.
@@ -25,6 +25,6 @@ Protect your own fortress from enemy invasions.
 The team that destroys the enemy main fortress wins.
 Technologies Used
 Unity – Game engine for development
-C# – Gameplay scripting
+html – Gameplay scripting
 Photon Unity Networking or multiplayer backend – Online multiplayer support
 Database/Cloud Service – Save player data and rankings
