@@ -1,0 +1,368 @@
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+#wrap{display:flex;flex-direction:column;gap:8px;padding:8px 0}
+#hud{display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--color-text-secondary)}
+#hud span{font-weight:500;color:var(--color-text-primary)}
+#hud b{color:var(--color-text-primary)}
+canvas{display:block;border:1px solid var(--color-border-secondary);border-radius:6px;image-rendering:pixelated}
+#ctrl{display:flex;flex-direction:column;align-items:center;gap:4px;padding-top:6px}
+.row{display:flex;gap:4px}
+.btn{width:40px;height:40px;border:.5px solid var(--color-border-secondary);border-radius:7px;background:var(--color-background-secondary);color:var(--color-text-primary);font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;user-select:none}
+.btn:active{background:var(--color-background-tertiary);transform:scale(.95)}
+.wbtn{width:90px;font-size:11px}
+#legend{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--color-text-secondary);padding:2px 0}
+.litem{display:flex;align-items:center;gap:4px}
+.lbox{width:12px;height:12px;border-radius:2px;flex-shrink:0}
+</style>
+<div id="wrap">
+<div id="hud">
+  HP: <span id="h-hp">10</span> &nbsp;|&nbsp;
+  隊友: <span id="h-ally">0</span> &nbsp;|&nbsp;
+  敵人: <span id="h-en">0</span> &nbsp;|&nbsp;
+  消滅: <span id="h-kills">0</span> &nbsp;|&nbsp;
+  <span id="h-msg" style="color:var(--color-text-info)">WASD移動 空白射擊 F招募隊友 E進出口</span>
+</div>
+<div id="legend">
+  <div class="litem"><div class="lbox" style="background:#378ADD"></div>玩家 @</div>
+  <div class="litem"><div class="lbox" style="background:#5DCAA5"></div>隊友 A</div>
+  <div class="litem"><div class="lbox" style="background:#E24B4A"></div>敵人 E</div>
+  <div class="litem"><div class="lbox" style="background:#EF9F27"></div>鑰匙 K</div>
+  <div class="litem"><div class="lbox" style="background:#888780"></div>我方城牆 W</div>
+  <div class="litem"><div class="lbox" style="background:#A32D2D"></div>敵方城牆 X</div>
+  <div class="litem"><div class="lbox" style="background:#97C459"></div>出口 O</div>
+</div>
+<canvas id="c" width="640" height="380"></canvas>
+<div id="ctrl">
+  <div class="row"><button class="btn" id="bu">↑</button></div>
+  <div class="row">
+    <button class="btn" id="bl">←</button>
+    <button class="btn" id="bd">↓</button>
+    <button class="btn" id="br">→</button>
+    <div style="width:8px"></div>
+    <button class="btn wbtn" id="bshoot">射擊(空白)</button>
+    <button class="btn wbtn" id="bally">招募(F)</button>
+    <button class="btn wbtn" id="bexit">出口(E)</button>
+  </div>
+</div>
+</div>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+const W=cv.width,H=cv.height,T=20,COLS=W/T,ROWS=H/T;
+let state,player,allies,enemies,pBullets,eBullets,walls,eWalls,exits,keyObj,kills,frame,spawnT,spawnI,hp,insideExit;
+
+function rng(a,b){return Math.floor(Math.random()*(b-a+1))+a;}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+
+function init(){
+  player={x:3,y:3,dx:1,dy:0};
+  allies=[];
+  enemies=[];
+  pBullets=[];
+  eBullets=[];
+  walls=[];
+  eWalls=[];
+  exits=[];
+  kills=0;frame=0;spawnT=0;spawnI=90;hp=10;insideExit=false;
+  state='play';
+  keyObj={x:COLS-3,y:ROWS-3};
+  // 初始我方城牆 (玩家周圍)
+  [[4,3],[4,4],[3,4],[2,4],[2,3]].forEach(([x,y])=>walls.push({x,y,hp:5}));
+  // 初始出口
+  exits.push({x:COLS/2|0,y:1});
+  exits.push({x:COLS/2|0,y:ROWS-2});
+  upHUD();
+}
+
+function upHUD(){
+  document.getElementById('h-hp').textContent=hp;
+  document.getElementById('h-ally').textContent=allies.length;
+  document.getElementById('h-en').textContent=enemies.length;
+  document.getElementById('h-kills').textContent=kills;
+}
+
+function blocked(x,y,arr){return arr.some(w=>w.x===x&&w.y===y);}
+function canMove(x,y){
+  if(x<0||x>=COLS||y<0||y>=ROWS)return false;
+  if(blocked(x,y,walls)||blocked(x,y,eWalls))return false;
+  return true;
+}
+
+function spawnEnemy(){
+  const sides=[];
+  for(let x=0;x<COLS;x++){sides.push({x,y:0});sides.push({x,y:ROWS-1});}
+  for(let y=1;y<ROWS-1;y++){sides.push({x:0,y});sides.push({x:COLS-1,y});}
+  const p=sides[rng(0,sides.length-1)];
+  if(Math.abs(p.x-player.x)+Math.abs(p.y-player.y)<6)return;
+  enemies.push({x:p.x,y:p.y,dx:1,dy:0,shootT:0,shootI:rng(40,80),moveT:0,moveI:rng(60,100),buildT:0,buildI:rng(180,300),hp:3});
+}
+
+function spawnAlly(){
+  const ax=clamp(player.x+rng(-3,3),0,COLS-1);
+  const ay=clamp(player.y+rng(-3,3),0,ROWS-1);
+  allies.push({x:ax,y:ay,dx:1,dy:0,shootT:0,shootI:rng(30,60),moveT:0,moveI:rng(30,50),buildT:0,buildI:rng(200,350),hp:5});
+}
+
+function shoot(src,arr,targetArr){
+  // 找最近目標
+  let best=null,bd=999;
+  for(const t of targetArr){
+    const d=Math.abs(t.x-src.x)+Math.abs(t.y-src.y);
+    if(d<bd){bd=d;best=t;}
+  }
+  if(!best||bd>15)return;
+  const ddx=best.x-src.x,ddy=best.y-src.y;
+  const len=Math.sqrt(ddx*ddx+ddy*ddy)||1;
+  const nx=ddx/len*1.8,ny=ddy/len*1.8;
+  arr.push({x:src.x*T+T/2,y:src.y*T+T/2,dx:nx,dy:ny,alive:true});
+  src.dx=Math.sign(ddx)||1;src.dy=Math.sign(ddy);
+}
+
+function buildWall(src,wArr,otherWalls){
+  // 在周圍空格蓋牆
+  const dirs=[[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[1,-1],[-1,1],[1,1]];
+  for(const [dx,dy] of dirs){
+    const nx=src.x+dx,ny=src.y+dy;
+    if(nx<1||nx>=COLS-1||ny<1||ny>=ROWS-1)continue;
+    if(blocked(nx,ny,walls)||blocked(nx,ny,eWalls)||blocked(nx,ny,exits))continue;
+    if(allies.some(a=>a.x===nx&&a.y===ny)||enemies.some(e=>e.x===nx&&e.y===ny))continue;
+    if(player.x===nx&&player.y===ny)continue;
+    wArr.push({x:nx,y:ny,hp:5});
+    return;
+  }
+}
+
+function moveSmart(src,tx,ty,friendly){
+  const ddx=tx-src.x,ddy=ty-src.y;
+  const mx=Math.sign(ddx),my=Math.sign(ddy);
+  const opts=[];
+  if(mx!==0)opts.push([mx,0]);
+  if(my!==0)opts.push([0,my]);
+  if(mx!==0&&my!==0)opts.push([mx,my]);
+  for(const [ox,oy] of opts){
+    const nx=src.x+ox,ny=src.y+oy;
+    if(friendly){if(canMove(nx,ny)){src.x=nx;src.y=ny;return;}}
+    else{if(nx>=0&&nx<COLS&&ny>=0&&ny<ROWS&&!blocked(nx,ny,eWalls)&&!blocked(nx,ny,walls)){src.x=nx;src.y=ny;return;}}
+  }
+}
+
+function bulletHit(bArr,targets,wallArr,isPlayerBullet){
+  for(let i=bArr.length-1;i>=0;i--){
+    const b=bArr[i];
+    if(!b.alive)continue;
+    const bx=b.x/T|0,by=b.y/T|0;
+    // 打牆
+    const wa=isPlayerBullet?eWalls:walls;
+    for(let j=wa.length-1;j>=0;j--){
+      if(wa[j].x===bx&&wa[j].y===by){wa[j].hp--;b.alive=false;if(wa[j].hp<=0)wa.splice(j,1);break;}
+    }
+    if(!b.alive)continue;
+    // 打目標
+    for(let j=targets.length-1;j>=0;j--){
+      if(Math.abs(bx-targets[j].x)<=0&&Math.abs(by-targets[j].y)<=0){
+        targets[j].hp--;b.alive=false;
+        if(targets[j].hp<=0){targets.splice(j,1);if(isPlayerBullet)kills++;}
+        break;
+      }
+    }
+  }
+}
+
+function getCSS(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
+const COLORS={player:'#378ADD',ally:'#5DCAA5',enemy:'#E24B4A',key:'#EF9F27',wall:'#888780',ewall:'#A32D2D',exit:'#97C459',pbullet:'#B5D4F4',ebullet:'#F09595',bg:null};
+
+function draw(){
+  COLORS.bg=getCSS('--color-background-primary')||'#fff';
+  ctx.fillStyle=COLORS.bg;ctx.fillRect(0,0,W,H);
+  // grid
+  ctx.strokeStyle='rgba(128,128,128,0.06)';ctx.lineWidth=.5;
+  for(let x=0;x<=W;x+=T){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+  for(let y=0;y<=H;y+=T){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+
+  function drawCell(gx,gy,color,label,border){
+    const px=gx*T+1,py=gy*T+1,s=T-2;
+    ctx.fillStyle=color;
+    ctx.beginPath();ctx.roundRect(px,py,s,s,3);ctx.fill();
+    if(border){ctx.strokeStyle=border;ctx.lineWidth=1;ctx.beginPath();ctx.roundRect(px,py,s,s,3);ctx.stroke();}
+    if(label){
+      ctx.fillStyle='#fff';ctx.font='500 10px sans-serif';
+      ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillText(label,px+s/2,py+s/2);
+    }
+  }
+
+  // exits
+  for(const e of exits)drawCell(e.x,e.y,COLORS.exit,'O');
+  // key
+  drawCell(keyObj.x,keyObj.y,COLORS.key,'K');
+  // walls
+  for(const w of walls){
+    const alpha=0.4+0.6*(w.hp/5);
+    ctx.globalAlpha=alpha;drawCell(w.x,w.y,COLORS.wall,'W');ctx.globalAlpha=1;
+  }
+  for(const w of eWalls){
+    const alpha=0.4+0.6*(w.hp/5);
+    ctx.globalAlpha=alpha;drawCell(w.x,w.y,COLORS.ewall,'X');ctx.globalAlpha=1;
+  }
+  // enemies
+  for(const e of enemies)drawCell(e.x,e.y,COLORS.enemy,'E');
+  // allies
+  for(const a of allies)drawCell(a.x,a.y,COLORS.ally,'A');
+  // player
+  drawCell(player.x,player.y,COLORS.player,'@');
+
+  // bullets
+  for(const b of pBullets){if(!b.alive)continue;
+    ctx.beginPath();ctx.arc(b.x,b.y,3.5,0,Math.PI*2);ctx.fillStyle=COLORS.pbullet;ctx.fill();}
+  for(const b of eBullets){if(!b.alive)continue;
+    ctx.beginPath();ctx.arc(b.x,b.y,3.5,0,Math.PI*2);ctx.fillStyle=COLORS.ebullet;ctx.fill();}
+}
+
+function drawOverlay(msg,sub,color){
+  ctx.fillStyle='rgba(0,0,0,.6)';ctx.fillRect(0,0,W,H);
+  ctx.fillStyle=color;ctx.font='500 32px sans-serif';
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(msg,W/2,H/2-16);
+  ctx.fillStyle='#ddd';ctx.font='15px sans-serif';
+  ctx.fillText(sub,W/2,H/2+20);
+}
+
+let raf;
+function loop(){
+  raf=requestAnimationFrame(loop);
+  frame++;
+
+  if(state==='play'){
+    // spawn
+    spawnT++;
+    if(spawnT>=spawnI){spawnT=0;spawnEnemy();if(spawnI>45)spawnI--;upHUD();}
+
+    // enemy AI
+    for(let i=0;i<enemies.length;i++){
+      const e=enemies[i];
+      // move toward player or ally
+      e.moveT++;
+      if(e.moveT>=e.moveI){e.moveT=0;
+        const tgt=allies.length&&rng(0,1)?allies[rng(0,allies.length-1)]:player;
+        moveSmart(e,tgt.x,tgt.y,false);
+      }
+      // shoot
+      e.shootT++;
+      if(e.shootT>=e.shootI){e.shootT=0;
+        const tgts=[player,...allies];
+        shoot(e,eBullets,tgts);
+      }
+      // build ewall
+      e.buildT++;
+      if(e.buildT>=e.buildI){e.buildT=0;buildWall(e,eWalls,walls);}
+    }
+
+    // ally AI
+    for(let i=0;i<allies.length;i++){
+      const a=allies[i];
+      a.moveT++;
+      if(a.moveT>=a.moveI){a.moveT=0;
+        if(enemies.length){const tgt=enemies[rng(0,enemies.length-1)];moveSmart(a,tgt.x,tgt.y,true);}
+      }
+      a.shootT++;
+      if(a.shootT>=a.shootI){a.shootT=0;shoot(a,pBullets,enemies);}
+      a.buildT++;
+      if(a.buildT>=a.buildI){a.buildT=0;buildWall(a,walls,eWalls);}
+    }
+
+    // move bullets
+    for(const b of pBullets){b.x+=b.dx;b.y+=b.dy;}
+    for(const b of eBullets){b.x+=b.dx;b.y+=b.dy;}
+    pBullets.forEach(b=>{if(b.x<0||b.x>W||b.y<0||b.y>H)b.alive=false;});
+    eBullets.forEach(b=>{if(b.x<0||b.x>W||b.y<0||b.y>H)b.alive=false;});
+
+    // bullet hits
+    bulletHit(pBullets,enemies,eWalls,true);
+    bulletHit(eBullets,[],walls,false);
+    // enemy bullets hit player
+    for(let i=eBullets.length-1;i>=0;i--){
+      const b=eBullets[i];if(!b.alive)continue;
+      const bx=b.x/T|0,by=b.y/T|0;
+      if(bx===player.x&&by===player.y){hp--;b.alive=false;if(hp<=0)state='lose';}
+      // hit ally
+      for(let j=allies.length-1;j>=0;j--){
+        if(bx===allies[j].x&&by===allies[j].y){allies[j].hp--;b.alive=false;if(allies[j].hp<=0)allies.splice(j,1);break;}
+      }
+    }
+
+    pBullets.splice(0,pBullets.length,...pBullets.filter(b=>b.alive));
+    eBullets.splice(0,eBullets.length,...eBullets.filter(b=>b.alive));
+
+    // enemy touch
+    for(const e of enemies){if(e.x===player.x&&e.y===player.y){hp-=2;if(hp<=0)state='lose';}}
+
+    // key
+    if(player.x===keyObj.x&&player.y===keyObj.y)state='win';
+
+    upHUD();
+  }
+
+  draw();
+  if(state==='lose')drawOverlay('GAME OVER','按「重新開始」再試一次','#F09595');
+  else if(state==='win')drawOverlay('YOU WIN!','恭喜找到鑰匙！消滅 '+kills+' 敵','#5DCAA5');
+}
+
+function playerShoot(){
+  if(state!=='play')return;
+  pBullets.push({x:player.x*T+T/2,y:player.y*T+T/2,dx:player.dx*2,dy:player.dy*2,alive:true});
+}
+
+function tryExit(){
+  if(state!=='play')return;
+  for(const ex of exits){
+    if(player.x===ex.x&&player.y===ex.y){
+      // 傳送到另一個出口
+      for(const ex2 of exits){
+        if(ex2!==ex){player.x=ex2.x;player.y=ex2.y;break;}
+      }
+      return;
+    }
+  }
+  // 走向最近出口
+  let best=null,bd=999;
+  for(const ex of exits){const d=Math.abs(ex.x-player.x)+Math.abs(ex.y-player.y);if(d<bd){bd=d;best=ex;}}
+  if(best){moveSmart(player,best.x,best.y,true);}
+}
+
+document.addEventListener('keydown',e=>{
+  if([' ','f','F','e','E','w','a','s','d','W','A','S','D',
+      'ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key))e.preventDefault();
+  if(state!=='play')return;
+  if(e.key==='ArrowUp'||e.key==='w'||e.key==='W'){const ny=player.y-1;if(canMove(player.x,ny)){player.y=ny;player.dx=0;player.dy=-1;}}
+  if(e.key==='ArrowDown'||e.key==='s'||e.key==='S'){const ny=player.y+1;if(canMove(player.x,ny)){player.y=ny;player.dx=0;player.dy=1;}}
+  if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A'){const nx=player.x-1;if(canMove(nx,player.y)){player.x=nx;player.dx=-1;player.dy=0;}}
+  if(e.key==='ArrowRight'||e.key==='d'||e.key==='D'){const nx=player.x+1;if(canMove(nx,player.y)){player.x=nx;player.dx=1;player.dy=0;}}
+  if(e.key===' ')playerShoot();
+  if(e.key==='f'||e.key==='F')spawnAlly();
+  if(e.key==='e'||e.key==='E')tryExit();
+});
+
+function mobileMove(dir){
+  if(state!=='play')return;
+  if(dir==='u'&&canMove(player.x,player.y-1)){player.y--;player.dx=0;player.dy=-1;}
+  if(dir==='d'&&canMove(player.x,player.y+1)){player.y++;player.dx=0;player.dy=1;}
+  if(dir==='l'&&canMove(player.x-1,player.y)){player.x--;player.dx=-1;player.dy=0;}
+  if(dir==='r'&&canMove(player.x+1,player.y)){player.x++;player.dx=1;player.dy=0;}
+}
+
+document.getElementById('bu').onclick=()=>mobileMove('u');
+document.getElementById('bd').onclick=()=>mobileMove('d');
+document.getElementById('bl').onclick=()=>mobileMove('l');
+document.getElementById('br').onclick=()=>mobileMove('r');
+document.getElementById('bshoot').onclick=playerShoot;
+document.getElementById('bally').onclick=spawnAlly;
+document.getElementById('bexit').onclick=tryExit;
+document.getElementById('c').addEventListener('click',()=>{
+  if(state!=='play'){init();}
+});
+
+// restart btn
+document.addEventListener('keydown',e=>{if((e.key==='r'||e.key==='R')&&state!=='play')init();});
+
+init();loop();
+</script>
